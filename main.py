@@ -1,0 +1,114 @@
+import easyocr
+import cv2
+from gtts import gTTS
+from pydub import AudioSegment
+from pydub.playback import play
+import io
+import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.image import Image
+from kivy.clock import Clock
+from kivy.graphics.texture import Texture
+from PIL import Image as PILImage
+import fitz  # PyMuPDF for PDF support
+
+# Initialize EasyOCR reader
+reader = easyocr.Reader(['en'])
+
+def perform_ocr(image):
+    results = reader.readtext(image)
+    return [result[1] for result in results]
+
+def text_to_speech(text):
+    tts = gTTS(text=text, lang='en')
+    fp = io.BytesIO()
+    tts.write_to_fp(fp)
+    fp.seek(0)
+    audio = AudioSegment.from_file(fp, format="mp3")
+    play(audio)
+
+def process_image(image_path):
+    image = cv2.imread(image_path)
+    text = perform_ocr(image)
+    combined_text = ' '.join(text)
+    text_to_speech(combined_text)
+
+def process_pdf(pdf_path):
+    doc = fitz.open(pdf_path)
+    text = ""
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        text += page.get_text()
+    text_to_speech(text)
+
+def browse_file():
+    root = tk.Tk()
+    root.withdraw()  # Hide the root window
+    file_types = [
+        ("Image Files", "*.png;*.jpg;*.jpeg;*.bmp;*.gif"),
+        ("PDF Files", "*.pdf"),
+        ("All Files", "*.*")
+    ]
+    messagebox.showinfo("Supported File Types", "Supported file types:\n- Image Files: PNG, JPG, JPEG, BMP, GIF\n- PDF Files")
+    file_path = filedialog.askopenfilename(filetypes=file_types)
+    return file_path
+
+class OCRApp(App):
+    def build(self):
+        self.layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        
+        # Label
+        self.label = Label(text='Real-Time OCR with Text-to-Speech', size_hint=(1, 0.1))
+        
+        # Image widget
+        self.image = Image(size_hint=(1, 0.6))
+        
+        # Button
+        self.button = Button(text='Browse File', size_hint=(1, 0.1))
+        self.button.bind(on_press=self.on_button_press)
+        
+        # Add widgets to layout
+        self.layout.add_widget(self.label)
+        self.layout.add_widget(self.image)
+        self.layout.add_widget(self.button)
+        
+        # Start the camera feed
+        self.capture = cv2.VideoCapture(0)
+        Clock.schedule_interval(self.update, 1.0 / 30.0)
+        
+        return self.layout
+
+    def update(self, dt):
+        ret, frame = self.capture.read()
+        if ret:
+            # Convert the frame to texture
+            buf = cv2.flip(frame, 0).tobytes()
+            image_texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='bgr')
+            image_texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
+            self.image.texture = image_texture
+            
+            # Perform OCR in a separate thread
+            threading.Thread(target=self.process_frame, args=(frame,)).start()
+
+    def process_frame(self, frame):
+        text = perform_ocr(frame)
+        combined_text = ' '.join(text)
+        text_to_speech(combined_text)
+
+    def on_button_press(self, instance):
+        file_path = browse_file()
+        if file_path:
+            if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif')):
+                threading.Thread(target=process_image, args=(file_path,)).start()
+            elif file_path.lower().endswith('.pdf'):
+                threading.Thread(target=process_pdf, args=(file_path,)).start()
+            else:
+                messagebox.showerror("Unsupported File Type", "The selected file type is not supported.")
+
+if __name__ == '__main__':
+    OCRApp().run()
